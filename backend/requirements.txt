@@ -2,3 +2,4 @@ opencv-python
 numpy
 manga-ocr
 pillow
+pytesseract
