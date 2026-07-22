@@ -63,15 +63,13 @@ def get_text_boxes_from_threshold(img, threshold=180):
 
     for contour in contours:
         x, y, w, h = cv2.boundingRect(contour)
-        area = w * h
-        if area < 5000 and w > 3 and h > 3:
-            if w < gray.shape[1] * 0.8 and h < gray.shape[0] * 0.8:
-                pad = max(2, int(min(w, h) * 0.2))
-                x0 = max(0, x - pad)
-                y0 = max(0, y - pad)
-                x1 = min(gray.shape[1], x + w + pad)
-                y1 = min(gray.shape[0], y + h + pad)
-                boxes.append((x0, y0, x1, y1))
+        if w > 3 and h > 3 and w < gray.shape[1] * 0.95 and h < gray.shape[0] * 0.95:
+            pad = max(4, int(min(w, h) * 0.35))
+            x0 = max(0, x - pad)
+            y0 = max(0, y - pad)
+            x1 = min(gray.shape[1], x + w + pad)
+            y1 = min(gray.shape[0], y + h + pad)
+            boxes.append((x0, y0, x1, y1))
 
     if not boxes:
         _, fallback = cv2.threshold(gray, threshold, 255, cv2.THRESH_BINARY_INV)
@@ -137,13 +135,19 @@ def build_mask_from_tesseract(img, conf_threshold=40):
             data["height"][i],
         )
         if w > 0 and h > 0:
-            boxes.append((x, y, x + w, y + h))
-            cv2.rectangle(mask, (x, y), (x + w, y + h), 255, -1)
+            pad = max(6, int(min(w, h) * 0.3))
+            x0 = max(0, x - pad)
+            y0 = max(0, y - pad)
+            x1 = min(img.shape[1], x + w + pad)
+            y1 = min(img.shape[0], y + h + pad)
+            boxes.append((x0, y0, x1, y1))
+            cv2.rectangle(mask, (x0, y0), (x1, y1), 255, -1)
 
-    if not boxes:
-        return build_mask_from_threshold(img)
+    threshold_mask, threshold_boxes = build_mask_from_threshold(img)
+    mask = cv2.bitwise_or(mask, threshold_mask)
+    boxes.extend(threshold_boxes)
 
-    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (5, 5))
+    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (7, 7))
     mask = cv2.dilate(mask, kernel, iterations=2)
     return mask, boxes
 
@@ -163,33 +167,52 @@ def overlay_translated_text(image, text, boxes):
         return image
 
     img = image.copy()
-    box = max(boxes, key=lambda b: (b[2] - b[0]) * (b[3] - b[1]))
-    x0, y0, x1, y1 = box
+    x0 = min(b[0] for b in boxes)
+    y0 = min(b[1] for b in boxes)
+    x1 = max(b[2] for b in boxes)
+    y1 = max(b[3] for b in boxes)
     width = max(1, x1 - x0)
     height = max(1, y1 - y0)
 
     font = cv2.FONT_HERSHEY_SIMPLEX
-    font_scale = max(0.45, min(0.9, width / 220))
-    thickness = 2
-    lines = textwrap.wrap(text, width=max(8, int(width / 8)))
+    thickness = 1
+    chosen_scale = None
+    chosen_lines = None
 
-    y_cursor = y0 + 20
-    for line in lines:
-        (text_w, text_h), _ = cv2.getTextSize(line, font, font_scale, thickness)
-        text_x = x0 + max(5, int((width - text_w) / 2))
+    for font_scale in [0.45, 0.35, 0.28, 0.22, 0.18, 0.14]:
+        wrap_width = max(10, int(width / max(10.0, 12.0 * font_scale)))
+        lines = textwrap.wrap(text, width=wrap_width)
+        total_height = 0
+        max_line_width = 0
+        for line in lines:
+            (text_w, text_h), _ = cv2.getTextSize(line, font, font_scale, thickness)
+            total_height += text_h + 6
+            max_line_width = max(max_line_width, text_w)
+
+        if max_line_width <= width - 12 and total_height <= height - 12:
+            chosen_scale = font_scale
+            chosen_lines = lines
+            break
+
+    if chosen_scale is None:
+        chosen_scale = 0.14
+        chosen_lines = textwrap.wrap(text, width=max(8, int(width / 12)))
+
+    y_cursor = y0 + 10
+    for line in chosen_lines:
+        (text_w, text_h), _ = cv2.getTextSize(line, font, chosen_scale, thickness)
+        text_x = x0 + max(4, int((width - text_w) / 2))
         cv2.putText(
             img,
             line,
             (text_x, y_cursor),
             font,
-            font_scale,
+            chosen_scale,
             (0, 0, 0),
             thickness,
             cv2.LINE_AA,
         )
-        y_cursor += text_h + 8
-        if y_cursor > y1 - 10:
-            break
+        y_cursor += text_h + 6
 
     return img
 
@@ -212,7 +235,9 @@ def inpaint_ns(input_path, output_path, mask=None, radius=3, translated_text="",
         result = overlay_translated_text(result, translated_text, boxes)
 
     os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
-    cv2.imwrite(output_path, result)
+    success = cv2.imwrite(output_path, result)
+    if not success:
+        raise RuntimeError(f"Failed to write image: {output_path}")
     return output_path
 
 
@@ -241,7 +266,12 @@ def extract_text_from_image(image_path):
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Inpaint manga text with Navier–Stokes")
-    parser.add_argument("--input", "-i", default="backend/tests/image.png", help="Input manga image")
+    parser.add_argument(
+        "--input",
+        "-i",
+        default="backend/tests/image2.png",
+        help="Input manga image path (for example: backend/tests/image.png or backend/tests/image1.png)",
+    )
     parser.add_argument(
         "--output",
         "-o",
@@ -269,6 +299,8 @@ def parse_args():
 def main():
     args = parse_args()
     print("Input image:", args.input)
+    if not os.path.exists(args.input):
+        raise FileNotFoundError(f"Input image not found: {args.input}")
 
     if args.use_threshold_mask:
         mask, boxes = build_mask_from_threshold(args.input)
