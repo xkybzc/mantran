@@ -340,6 +340,23 @@ def _normalize_mask(mask, image_shape):
     return mask
 
 
+def remove_text_regions(image, mask, radius=3):
+    if image is None:
+        raise ValueError("Image cannot be None")
+
+    img = image.copy()
+    mask = _normalize_mask(mask, img.shape)
+    if np.count_nonzero(mask) == 0:
+        return img
+
+    if radius <= 0:
+        flags = cv2.INPAINT_TELEA
+    else:
+        flags = cv2.INPAINT_NS
+
+    return cv2.inpaint(img, mask, radius, flags=flags)
+
+
 def inpaint_ns(input_path, output_path, mask=None, radius=3, translated_text="", boxes=None):
     img = cv2.imread(input_path, cv2.IMREAD_COLOR)
     if img is None:
@@ -354,12 +371,11 @@ def inpaint_ns(input_path, output_path, mask=None, radius=3, translated_text="",
         mask = mask_img
 
     mask = _normalize_mask(mask, img.shape)
+    base_result = remove_text_regions(img, mask, radius=radius)
     if translated_text and boxes:
-        result = img.copy()
-        result = overlay_translated_text(result, translated_text, boxes)
+        result = overlay_translated_text(base_result, translated_text, boxes)
     else:
-        flags = cv2.INPAINT_TELEA if radius <= 0 else cv2.INPAINT_NS
-        result = cv2.inpaint(img, mask, radius, flags=flags)
+        result = base_result
 
     os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
     success = cv2.imwrite(output_path, result)

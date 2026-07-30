@@ -44,3 +44,17 @@ def test_mask_stays_tight_around_text():
     bubble_area = (180 - 40) * (140 - 50)
     mask_area = int(np.count_nonzero(mask[50:140, 40:180]))
     assert mask_area < bubble_area * 0.35
+
+
+def test_remove_text_regions_inpaints_masked_area():
+    img = np.full((160, 160, 3), 255, dtype=np.uint8)
+    cv2.putText(img, "日本語", (30, 90), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 0, 0), 2, cv2.LINE_AA)
+
+    mask = np.zeros(img.shape[:2], dtype=np.uint8)
+    mask[60:120, 20:140] = 255
+
+    result = main.remove_text_regions(img, mask, radius=3)
+
+    assert result.shape == img.shape
+    changed_pixels = np.count_nonzero(np.any(result != img, axis=2))
+    assert changed_pixels > 0
