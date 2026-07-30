@@ -3,3 +3,8 @@ numpy
 manga-ocr
 pillow
 pytesseract
+fastapi
+uvicorn[standard]
+python-multipart
+translate
+deep-translator
