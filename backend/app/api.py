@@ -1,4 +1,4 @@
-"""HTTP API: upload a page, get the translated page back. Also serves the frontend."""
+"""HTTP API: translate single pages or whole MangaDex chapters. Also serves the frontend."""
 
 from __future__ import annotations
 
@@ -9,16 +9,31 @@ import cv2
 import numpy as np
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel
 
+from . import mangadex
+from .chapters import build_zip, jobs, zip_name
+from .languages import LANGUAGES, check_pair, language_name, source_languages, target_languages
 from .pipeline import translate_image
 
 FRONTEND_DIR = Path(__file__).resolve().parents[2] / "frontend"
 
-app = FastAPI(title="Mantran", version="0.2.0")
+app = FastAPI(title="Mantran", version="0.3.0")
 # Lets the frontend call the API when it is opened from another origin
 # (a different dev server, or straight from disk).
-app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["GET", "POST"], allow_headers=["*"])
+app.add_middleware(
+    CORSMiddleware, allow_origins=["*"], allow_methods=["GET", "POST", "DELETE"], allow_headers=["*"]
+)
+
+
+def _bad_request(exc: Exception):
+    raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+def _mangadex_error(exc: mangadex.MangaDexError):
+    raise HTTPException(status_code=502, detail=str(exc)) from exc
 
 
 @app.get("/health")
@@ -26,7 +41,15 @@ def health_check():
     return {"status": "ok"}
 
 
-# A plain ``def`` so FastAPI runs the CPU-heavy pipeline in its thread pool.
+@app.get("/api/languages")
+def list_languages():
+    return {
+        "sources": [{"code": lang.code, "name": lang.name} for lang in source_languages()],
+        "targets": [{"code": lang.code, "name": lang.name} for lang in target_languages()],
+    }
+
+
+# Plain ``def`` handlers so FastAPI runs the CPU-heavy work in its thread pool.
 @app.post("/api/translate")
 def translate_upload(
     file: UploadFile = File(...),
@@ -35,6 +58,10 @@ def translate_upload(
 ):
     if not file.filename:
         raise HTTPException(status_code=400, detail="No file provided")
+    try:
+        check_pair(source_lang, target_lang)
+    except ValueError as exc:
+        _bad_request(exc)
 
     image = cv2.imdecode(np.frombuffer(file.file.read(), dtype=np.uint8), cv2.IMREAD_COLOR)
     if image is None:
@@ -52,6 +79,96 @@ def translate_upload(
         "translated_text": metadata["translated_text"],
         "regions": metadata["regions"],
     }
+
+
+# --- MangaDex ----------------------------------------------------------------------
+
+
+@app.get("/api/mangadex/lookup")
+def mangadex_lookup(url: str):
+    """Resolve a title or chapter link to the title, its languages and (for chapter links) the chapter."""
+    try:
+        kind, item_id = mangadex.parse_link(url)
+        chapter = None
+        if kind in ("chapter", "unknown"):
+            try:
+                chapter = mangadex.get_chapter(item_id)
+            except mangadex.MangaDexError:
+                if kind == "chapter":
+                    raise
+        manga = mangadex.get_manga(chapter["manga_id"] if chapter else item_id)
+    except mangadex.MangaDexError as exc:
+        _mangadex_error(exc)
+
+    manga["languages"] = [
+        {"code": code, "name": language_name(code), "supported": code in LANGUAGES}
+        for code in manga["languages"]
+    ]
+    if chapter:
+        chapter["label"] = mangadex.chapter_label(chapter)
+    return {"manga": manga, "chapter": chapter}
+
+
+@app.get("/api/mangadex/manga/{manga_id}/chapters")
+def mangadex_chapters(manga_id: str, lang: str):
+    try:
+        chapters = mangadex.list_chapters(manga_id, lang)
+    except mangadex.MangaDexError as exc:
+        _mangadex_error(exc)
+    for chapter in chapters:
+        chapter["label"] = mangadex.chapter_label(chapter)
+    return {"chapters": chapters}
+
+
+# --- Chapter jobs ------------------------------------------------------------------
+
+
+class ChapterRequest(BaseModel):
+    chapter_id: str
+    source_lang: str
+    target_lang: str
+
+
+def _job_or_404(job_id: str):
+    job = jobs.get(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Unknown job (the server may have restarted)")
+    return job
+
+
+@app.post("/api/jobs")
+def start_chapter_job(request: ChapterRequest):
+    try:
+        return jobs.submit(request.chapter_id, request.source_lang, request.target_lang).to_dict()
+    except ValueError as exc:
+        _bad_request(exc)
+
+
+@app.get("/api/jobs/{job_id}")
+def chapter_job_status(job_id: str):
+    return _job_or_404(job_id).to_dict()
+
+
+@app.delete("/api/jobs/{job_id}")
+def cancel_chapter_job(job_id: str):
+    _job_or_404(job_id)
+    return jobs.cancel(job_id).to_dict()
+
+
+@app.get("/api/jobs/{job_id}/pages/{index}")
+def chapter_job_page(job_id: str, index: int):
+    path = _job_or_404(job_id).page_path(index)
+    if path is None or not path.exists():
+        raise HTTPException(status_code=404, detail="That page isn't translated yet")
+    return FileResponse(path)
+
+
+@app.get("/api/jobs/{job_id}/download")
+def chapter_job_download(job_id: str):
+    job = _job_or_404(job_id)
+    if job.status != "done" or not job.pages:
+        raise HTTPException(status_code=409, detail="The chapter is still being translated")
+    return FileResponse(build_zip(job), media_type="application/zip", filename=zip_name(job))
 
 
 # Mounted last so the API routes above take precedence over static files.

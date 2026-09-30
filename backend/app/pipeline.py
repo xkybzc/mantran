@@ -10,14 +10,18 @@ import numpy as np
 
 from .cleaning import erase_region, find_bubble_interior
 from .detection import TextRegion, detect_regions, pad_box
+from .languages import check_pair, get_language
 from .ocr import read_region
-from .translation import translate_text
+from .translation import translate_texts
 from .typesetting import layout_text, draw_layouts
 
 # Small scans are upscaled first so the English lettering stays legible.
 MIN_WORKING_SIZE = 512
-# English lettering is set at about this fraction of the original glyph size.
-FONT_TO_GLYPH_RATIO = 0.65
+# Lettering is set at about this fraction of the original glyph size: CJK
+# glyphs are full squares, so the Latin replacement is smaller.
+FONT_TO_GLYPH_RATIO = {True: 0.65, False: 1.1}
+# Upper bound on lettering size relative to the page, in case the glyph estimate is off.
+MAX_FONT_TO_PAGE = 0.04
 
 
 def auto_scale(image, min_size=MIN_WORKING_SIZE) -> int:
@@ -57,19 +61,25 @@ def translate_image(image, source_lang="ja", target_lang="en", use_detector=True
 
     ``scale`` upsamples the page before processing; ``0`` picks it automatically.
     """
+    check_pair(source_lang, target_lang)
+    font_ratio = FONT_TO_GLYPH_RATIO[get_language(source_lang).square_glyphs]
     scale = auto_scale(image) if scale <= 0 else scale
     if scale != 1:
         image = cv2.resize(image, None, fx=scale, fy=scale, interpolation=cv2.INTER_LANCZOS4)
 
     regions = detect_regions(image, use_model=use_detector)
     min_font = max(8, round(max(image.shape[:2]) * 0.012))
+    page_max_font = max(min_font, round(max(image.shape[:2]) * MAX_FONT_TO_PAGE))
+
+    interiors = [find_bubble_interior(image, region) for region in regions]
+    sources = [read_region(image, region, source_lang, interior) for region, interior in zip(regions, interiors)]
+    # The whole page in one batch: fewer requests to the online translators.
+    translations = translate_texts(sources, src=source_lang, dst=target_lang)
 
     result = image
     layouts = []
     region_info = []
-    for region in regions:
-        source = read_region(image, region, source_lang)
-        translation = translate_text(source, src=source_lang, dst=target_lang) if source else ""
+    for region, interior, source, translation in zip(regions, interiors, sources, translations):
         region_info.append({
             "text_box": region.text_box,
             "bubble_box": region.bubble_box,
@@ -80,10 +90,9 @@ def translate_image(image, source_lang="ja", target_lang="en", use_detector=True
             # Nothing to put back: leave the original lettering untouched.
             continue
 
-        interior = find_bubble_interior(image, region)
         result = erase_region(result, region, interior)
         area_box, area_mask = _text_area(region, interior, image.shape)
-        max_font = max(min_font, round(_glyph_size(region, source) * FONT_TO_GLYPH_RATIO))
+        max_font = min(page_max_font, max(min_font, round(_glyph_size(region, source) * font_ratio)))
         layout = layout_text(translation, area_box, area_mask, max_size=max_font, min_size=min_font)
         if layout is None:
             layout = layout_text(translation, area_box, None, max_size=max_font, min_size=min_font // 2)

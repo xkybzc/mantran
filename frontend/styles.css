@@ -21,6 +21,11 @@
   box-sizing: border-box;
 }
 
+/* Components set their own display; make sure the hidden attribute still wins. */
+[hidden] {
+  display: none !important;
+}
+
 html,
 body {
   margin: 0;
@@ -403,11 +408,290 @@ select:focus-visible,
   pointer-events: none;
 }
 
+/* Mode tabs */
+
+.tabs {
+  display: inline-flex;
+  gap: 4px;
+  padding: 4px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--navy-950);
+}
+
+.tab {
+  height: 32px;
+  padding: 0 16px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.tab:hover {
+  color: var(--white);
+}
+
+.tab[aria-selected="true"] {
+  background: var(--blue);
+  color: var(--white);
+}
+
+.tab:focus-visible {
+  outline: 2px solid var(--blue-soft);
+  outline-offset: 2px;
+}
+
+.workspace[hidden] {
+  display: none;
+}
+
+/* Text inputs share the select styling */
+
+input[type="url"],
+input[type="search"] {
+  height: 40px;
+  width: 100%;
+  padding: 0 12px;
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  background: var(--navy-800);
+  color: var(--white);
+  font: inherit;
+}
+
+input::placeholder {
+  color: #66769a;
+}
+
+input:focus-visible {
+  outline: 2px solid var(--blue-soft);
+  outline-offset: 2px;
+}
+
+.field.grow {
+  flex: 1 1 200px;
+  min-width: 0;
+}
+
+/* Chapter picker (left panel of the chapter view) */
+
+.panel-body {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 14px;
+  min-height: 0;
+  padding: 18px;
+}
+
+.link-form {
+  display: flex;
+  align-items: flex-end;
+  gap: 10px;
+}
+
+.manga-card {
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--blue);
+  border-radius: 10px;
+  background: var(--black);
+}
+
+.manga-card[hidden],
+.picker-row[hidden] {
+  display: none;
+}
+
+.manga-title {
+  margin: 0;
+  color: var(--white);
+  font-size: 17px;
+  font-weight: 700;
+}
+
+.manga-sub {
+  margin: 2px 0 0;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.picker-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 12px;
+}
+
+.chapter-list {
+  flex: 1 1 auto;
+  height: 0; /* the list scrolls instead of growing the panel */
+  min-height: 240px;
+  overflow-y: auto;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--black);
+}
+
+.list-empty {
+  margin: 0;
+  padding: 28px 20px;
+  color: var(--muted);
+  text-align: center;
+}
+
+.chapter-row {
+  display: grid;
+  grid-template-columns: minmax(64px, auto) minmax(0, 1fr) auto;
+  align-items: baseline;
+  gap: 12px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--line);
+  cursor: pointer;
+}
+
+.chapter-row:hover {
+  background: var(--navy-900);
+}
+
+.chapter-row:has(input:checked) {
+  background: var(--navy-800);
+  box-shadow: inset 3px 0 0 var(--blue-soft);
+}
+
+.chapter-row:has(input:focus-visible) {
+  outline: 2px solid var(--blue-soft);
+  outline-offset: -2px;
+}
+
+.chapter-row input {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.chapter-number {
+  color: var(--white);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.chapter-title {
+  overflow: hidden;
+  color: var(--text);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chapter-extra {
+  color: var(--muted);
+  font-size: 13px;
+  white-space: nowrap;
+}
+
+.note {
+  flex: 1 1 160px;
+  min-width: 0;
+  align-self: center;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+/* Chapter reader (right panel of the chapter view) */
+
+.progress {
+  height: 3px;
+  background: var(--line);
+}
+
+.progress[hidden] {
+  display: none;
+}
+
+.progress-bar {
+  width: 0;
+  height: 100%;
+  background: var(--blue-soft);
+  transition: width 0.3s;
+}
+
+.stage.reader {
+  display: block;
+  overflow-y: auto;
+}
+
+.stage.reader .stage-empty {
+  height: 100%;
+  justify-content: center;
+}
+
+.reader-pages {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 8px;
+}
+
+.reader-pages:empty {
+  display: none;
+}
+
+.reader-page {
+  margin: 0;
+}
+
+.reader-page img {
+  width: 100%;
+  height: auto;
+  border-radius: 4px;
+}
+
+.page-placeholder {
+  display: grid;
+  place-items: center;
+  aspect-ratio: 5 / 7;
+  border: 1px dashed var(--line-strong);
+  border-radius: 4px;
+  background: var(--navy-950);
+  color: var(--muted);
+  font-size: 14px;
+}
+
+.page-placeholder.is-failed {
+  border-color: #5a2a35;
+  color: var(--error);
+}
+
 /* Narrow screens: stack the panels */
+
+@media (max-width: 1100px) {
+  .brand-tagline {
+    display: none;
+  }
+}
 
 @media (max-width: 900px) {
   :root {
     --gutter: 16px;
+  }
+
+  .topbar {
+    flex-wrap: wrap;
+  }
+
+  .tabs {
+    order: 3;
+    width: 100%;
+  }
+
+  .tab {
+    flex: 1;
   }
 
   .workspace {
@@ -420,8 +704,13 @@ select:focus-visible,
     margin: 14px;
   }
 
-  .brand-tagline {
-    display: none;
+  .panel-body {
+    padding: 14px;
+  }
+
+  .chapter-list {
+    height: auto;
+    max-height: 50vh;
   }
 }
 
@@ -441,5 +730,13 @@ select:focus-visible,
 
   .actions .btn {
     flex: 1;
+  }
+
+  .chapter-row {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  .chapter-extra {
+    grid-column: 2;
   }
 }

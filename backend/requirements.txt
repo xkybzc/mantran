@@ -1,6 +1,7 @@
 opencv-python
 numpy
 pillow
+requests
 torch
 transformers
 manga-ocr

@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Mantran</title>
-  <meta name="description" content="Translate manga pages: upload a page, get it back lettered in your language.">
+  <meta name="description" content="Translate manga pages and whole MangaDex chapters into English or Vietnamese.">
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%231d4ed8'/%3E%3Cpath d='M8 23V9h3l5 7 5-7h3v14h-3v-9l-5 7-5-7v9z' fill='white'/%3E%3C/svg%3E">
   <link rel="stylesheet" href="styles.css">
 </head>
@@ -15,6 +15,10 @@
       <span class="brand-name">Mantran</span>
       <span class="brand-tagline">Manga page translator</span>
     </div>
+    <nav class="tabs" role="tablist" aria-label="Mode">
+      <button class="tab" id="tab-page" type="button" role="tab" aria-controls="view-page" aria-selected="true">Single page</button>
+      <button class="tab" id="tab-chapter" type="button" role="tab" aria-controls="view-chapter" aria-selected="false" tabindex="-1">MangaDex chapter</button>
+    </nav>
     <div class="status" id="api-status" data-state="checking">
       <span class="status-dot" aria-hidden="true"></span>
       <span class="status-text">Connecting to server</span>
@@ -26,7 +30,8 @@
     <button class="error-close" id="error-close" type="button" aria-label="Dismiss">Close</button>
   </div>
 
-  <main class="workspace">
+  <!-- Single page: upload on the left, translation on the right -->
+  <main class="workspace" id="view-page" role="tabpanel" aria-labelledby="tab-page">
     <section class="panel" aria-labelledby="original-title">
       <div class="panel-head">
         <h2 id="original-title">Original</h2>
@@ -51,7 +56,7 @@
       <div class="controls">
         <label class="field">
           <span class="field-label">From</span>
-          <select id="source-lang" disabled>
+          <select id="source-lang">
             <option value="ja">Japanese</option>
           </select>
         </label>
@@ -92,6 +97,88 @@
       <div class="controls">
         <div class="actions">
           <a class="btn btn-primary" id="download-btn" aria-disabled="true">Download PNG</a>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <!-- MangaDex chapter: pick a chapter on the left, read the translation on the right -->
+  <main class="workspace" id="view-chapter" role="tabpanel" aria-labelledby="tab-chapter" hidden>
+    <section class="panel" aria-labelledby="mangadex-title">
+      <div class="panel-head">
+        <h2 id="mangadex-title">MangaDex</h2>
+        <span class="panel-meta" id="chapter-count"></span>
+      </div>
+
+      <div class="panel-body">
+        <form class="link-form" id="link-form">
+          <label class="field grow">
+            <span class="field-label">Title or chapter link</span>
+            <input type="url" id="manga-link" placeholder="https://mangadex.org/title/..." required
+                   autocomplete="off" spellcheck="false">
+          </label>
+          <button class="btn btn-primary" id="load-btn" type="submit">Load</button>
+        </form>
+
+        <div class="manga-card" id="manga-card" hidden>
+          <p class="manga-title" id="manga-title"></p>
+          <p class="manga-sub" id="manga-sub"></p>
+        </div>
+
+        <div class="picker-row" id="picker-row" hidden>
+          <label class="field">
+            <span class="field-label">From</span>
+            <select id="chapter-source"></select>
+          </label>
+          <label class="field">
+            <span class="field-label">To</span>
+            <select id="chapter-target">
+              <option value="en">English</option>
+              <option value="vi">Vietnamese</option>
+            </select>
+          </label>
+          <label class="field grow">
+            <span class="field-label">Find chapter</span>
+            <input type="search" id="chapter-filter" placeholder="Number or title" autocomplete="off">
+          </label>
+        </div>
+
+        <div class="chapter-list" id="chapter-list" role="radiogroup" aria-label="Chapters">
+          <p class="list-empty" id="chapter-empty">Paste a MangaDex title or chapter link and press Load.</p>
+        </div>
+      </div>
+
+      <div class="controls">
+        <span class="note" id="selection-note"></span>
+        <div class="actions">
+          <button class="btn btn-primary" id="chapter-translate-btn" type="button" disabled>Translate chapter</button>
+        </div>
+      </div>
+    </section>
+
+    <section class="panel" aria-labelledby="reader-title">
+      <div class="panel-head">
+        <h2 id="reader-title">Translated chapter</h2>
+        <span class="panel-meta" id="job-meta"></span>
+      </div>
+      <div class="progress" id="job-progress" hidden>
+        <div class="progress-bar" id="job-progress-bar"></div>
+      </div>
+
+      <div class="stage reader" id="reader">
+        <div class="stage-empty" id="reader-empty">
+          <p class="stage-title">No chapter yet</p>
+          <p class="stage-hint">Load a title, pick a chapter and press Translate chapter.</p>
+          <p class="stage-hint small">Pages appear here as they are translated.</p>
+        </div>
+        <div class="reader-pages" id="reader-pages"></div>
+      </div>
+
+      <div class="controls">
+        <span class="note" id="job-status" aria-live="polite"></span>
+        <div class="actions">
+          <button class="btn btn-ghost" id="job-cancel-btn" type="button" hidden>Cancel</button>
+          <a class="btn btn-primary" id="zip-btn" aria-disabled="true">Download ZIP</a>
         </div>
       </div>
     </section>
