@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Mantran</title>
+  <meta name="description" content="Translate manga pages: upload a page, get it back lettered in your language.">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%231d4ed8'/%3E%3Cpath d='M8 23V9h3l5 7 5-7h3v14h-3v-9l-5 7-5-7v9z' fill='white'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <span class="brand-mark" aria-hidden="true">M</span>
+      <span class="brand-name">Mantran</span>
+      <span class="brand-tagline">Manga page translator</span>
+    </div>
+    <div class="status" id="api-status" data-state="checking">
+      <span class="status-dot" aria-hidden="true"></span>
+      <span class="status-text">Connecting to server</span>
+    </div>
+  </header>
+
+  <div class="error" id="error" role="alert" hidden>
+    <span class="error-text" id="error-text"></span>
+    <button class="error-close" id="error-close" type="button" aria-label="Dismiss">Close</button>
+  </div>
+
+  <main class="workspace">
+    <section class="panel" aria-labelledby="original-title">
+      <div class="panel-head">
+        <h2 id="original-title">Original</h2>
+        <span class="panel-meta" id="file-meta"></span>
+      </div>
+
+      <div class="stage dropzone" id="dropzone" tabindex="0" role="button"
+           aria-label="Upload a manga page. Drop an image, paste it, or press Enter to browse.">
+        <input type="file" id="file-input" accept="image/png,image/jpeg,image/webp,image/bmp" hidden>
+        <div class="stage-empty" id="dropzone-empty">
+          <svg class="upload-icon" viewBox="0 0 48 48" aria-hidden="true">
+            <path d="M24 31V11m0 0-8 8m8-8 8 8" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+            <path d="M10 29v6a4 4 0 0 0 4 4h20a4 4 0 0 0 4-4v-6" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round"/>
+          </svg>
+          <p class="stage-title">Drop a manga page here</p>
+          <p class="stage-hint">or click to browse, or paste with Ctrl+V</p>
+          <p class="stage-hint small">PNG, JPG, WEBP or BMP, up to 20 MB</p>
+        </div>
+        <img id="original-image" alt="Uploaded page" hidden>
+      </div>
+
+      <div class="controls">
+        <label class="field">
+          <span class="field-label">From</span>
+          <select id="source-lang" disabled>
+            <option value="ja">Japanese</option>
+          </select>
+        </label>
+        <label class="field">
+          <span class="field-label">To</span>
+          <select id="target-lang">
+            <option value="en">English</option>
+            <option value="vi">Vietnamese</option>
+          </select>
+        </label>
+        <div class="actions">
+          <button class="btn btn-ghost" id="clear-btn" type="button" disabled>Remove</button>
+          <button class="btn btn-primary" id="translate-btn" type="button" disabled>Translate</button>
+        </div>
+      </div>
+    </section>
+
+    <section class="panel" aria-labelledby="translated-title" aria-live="polite">
+      <div class="panel-head">
+        <h2 id="translated-title">Translated</h2>
+        <span class="panel-meta" id="result-meta"></span>
+      </div>
+
+      <div class="stage" id="result-stage">
+        <div class="stage-empty" id="result-empty">
+          <p class="stage-title">No translation yet</p>
+          <p class="stage-hint">Upload a page on the left and press Translate.</p>
+        </div>
+        <div class="loading" id="loading" hidden>
+          <div class="spinner" aria-hidden="true"></div>
+          <p class="stage-title">Translating page</p>
+          <p class="stage-hint" id="elapsed">0 s</p>
+          <p class="stage-hint small">The first page after starting the server loads the models and can take up to a minute.</p>
+        </div>
+        <img id="result-image" alt="Translated page" hidden>
+      </div>
+
+      <div class="controls">
+        <div class="actions">
+          <a class="btn btn-primary" id="download-btn" aria-disabled="true">Download PNG</a>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <script src="app.js"></script>
+</body>
+</html>

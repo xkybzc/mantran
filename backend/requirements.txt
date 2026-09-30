@@ -1,10 +1,12 @@
 opencv-python
 numpy
-manga-ocr
 pillow
+torch
+transformers
+manga-ocr
 pytesseract
+deep-translator
+translate
 fastapi
 uvicorn[standard]
 python-multipart
-translate
-deep-translator
