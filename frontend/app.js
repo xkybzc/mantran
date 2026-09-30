@@ -4,13 +4,16 @@
 // the same origin; opened any other way it falls back to the local server.
 const DEFAULT_API = "http://127.0.0.1:8000";
 const MAX_FILE_BYTES = 20 * 1024 * 1024;
+const MAX_PAGES = 500;
 const ACCEPTED_TYPES = ["image/png", "image/jpeg", "image/webp", "image/bmp"];
+const IMAGE_NAME = /\.(png|jpe?g|webp|bmp)$/i;
 const POLL_INTERVAL_MS = 1000;
-const JOB_STORAGE_KEY = "mantran.chapterJob";
 // Which chapter language to preselect when a title has several.
 const SOURCE_PREFERENCE = ["en", "es-la", "es", "id", "pt-br", "pt", "fr", "it", "de", "ru", "tr", "pl", "ja", "ko", "zh", "zh-hk", "vi"];
+const REMOVE_ICON = '<svg viewBox="0 0 12 12" aria-hidden="true"><path d="M2 2l8 8M10 2l-8 8" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>';
 
 const $ = (id) => document.getElementById(id);
+const DOT = " · ";
 
 const el = {
   status: $("api-status"),
@@ -19,22 +22,19 @@ const el = {
   errorText: $("error-text"),
   errorClose: $("error-close"),
   tabs: [$("tab-page"), $("tab-chapter")],
-  // Single page
+  // Upload
   dropzone: $("dropzone"),
   dropzoneEmpty: $("dropzone-empty"),
+  thumbGrid: $("thumb-grid"),
   fileInput: $("file-input"),
-  fileMeta: $("file-meta"),
-  originalImage: $("original-image"),
+  folderInput: $("folder-input"),
+  chooseFilesBtn: $("choose-files-btn"),
+  chooseFolderBtn: $("choose-folder-btn"),
+  uploadMeta: $("upload-meta"),
   sourceLang: $("source-lang"),
   targetLang: $("target-lang"),
   clearBtn: $("clear-btn"),
   translateBtn: $("translate-btn"),
-  resultMeta: $("result-meta"),
-  resultEmpty: $("result-empty"),
-  loading: $("loading"),
-  elapsed: $("elapsed"),
-  resultImage: $("result-image"),
-  downloadBtn: $("download-btn"),
   // MangaDex chapter
   linkForm: $("link-form"),
   mangaLink: $("manga-link"),
@@ -51,31 +51,18 @@ const el = {
   chapterCount: $("chapter-count"),
   selectionNote: $("selection-note"),
   chapterTranslateBtn: $("chapter-translate-btn"),
-  jobMeta: $("job-meta"),
-  jobProgress: $("job-progress"),
-  jobProgressBar: $("job-progress-bar"),
-  reader: $("reader"),
-  readerEmpty: $("reader-empty"),
-  readerPages: $("reader-pages"),
-  jobStatus: $("job-status"),
-  jobCancelBtn: $("job-cancel-btn"),
-  zipBtn: $("zip-btn"),
 };
 
 const state = {
   apiBase: location.protocol.startsWith("http") ? "" : DEFAULT_API,
-  // Single page
-  file: null,
-  previewUrl: null,
-  busy: false,
-  timer: null,
+  // Upload
+  items: [], // { file, path, url }
+  uploading: false,
   // MangaDex chapter
   manga: null,
   chapters: [],
   chaptersCache: new Map(),
   selectedChapter: null,
-  job: null,
-  pollTimer: null,
 };
 
 // ---- Helpers --------------------------------------------------------------
@@ -121,10 +108,19 @@ function storageSet(key, value) {
   }
 }
 
+function formatBytes(bytes) {
+  if (bytes < 1024 * 1024) return `${Math.max(1, Math.round(bytes / 1024))} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
 function formatDuration(seconds) {
   seconds = Math.round(seconds);
   if (seconds < 60) return `${seconds} s`;
   return `${Math.floor(seconds / 60)} min ${seconds % 60} s`;
+}
+
+function plural(count, word) {
+  return `${count} ${count === 1 ? word : `${word}s`}`;
 }
 
 // Disable the target language that equals the source (e.g. English to English).
@@ -137,7 +133,7 @@ function syncTargetOptions(sourceSelect, targetSelect) {
   }
 }
 
-// ---- Server status --------------------------------------------------------
+// ---- Server status and errors ---------------------------------------------
 
 function setStatus(kind, text) {
   el.status.dataset.state = kind;
@@ -168,6 +164,15 @@ async function ensureServer() {
   return false;
 }
 
+function showError(message) {
+  el.errorText.textContent = message;
+  el.error.hidden = false;
+}
+
+function hideError() {
+  el.error.hidden = true;
+}
+
 function reportFailure(error, action) {
   if (error instanceof TypeError) {
     setStatus("offline", "Server offline");
@@ -190,17 +195,6 @@ async function loadLanguages() {
   syncTargetOptions(el.sourceLang, el.targetLang);
 }
 
-// ---- Errors ---------------------------------------------------------------
-
-function showError(message) {
-  el.errorText.textContent = message;
-  el.error.hidden = false;
-}
-
-function hideError() {
-  el.error.hidden = true;
-}
-
 // ---- Tabs -----------------------------------------------------------------
 
 function showView(name, { focus = false } = {}) {
@@ -219,146 +213,336 @@ function viewFromHash() {
   return location.hash === "#chapter" ? "chapter" : "page";
 }
 
-// ==== Single page ==========================================================
+// ==== Job view: progress, reader and download, shared by both tabs ==========
 
-function formatBytes(bytes) {
-  if (bytes < 1024 * 1024) return `${Math.max(1, Math.round(bytes / 1024))} KB`;
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-}
+function createJobView(prefix, { storageKey, onChange }) {
+  const ui = {
+    meta: $(`${prefix}-job-meta`),
+    progress: $(`${prefix}-job-progress`),
+    progressBar: $(`${prefix}-job-progress-bar`),
+    readerEmpty: $(`${prefix}-reader-empty`),
+    readerPages: $(`${prefix}-reader-pages`),
+    status: $(`${prefix}-job-status`),
+    cancelBtn: $(`${prefix}-job-cancel-btn`),
+    downloadBtn: $(`${prefix}-download-btn`),
+  };
+  const view = { job: null, pollTimer: null };
 
-function setFile(file) {
-  if (!file) return;
-  if (!ACCEPTED_TYPES.includes(file.type)) {
-    showError("That file is not a supported image. Use PNG, JPG, WEBP or BMP.");
-    return;
-  }
-  if (file.size > MAX_FILE_BYTES) {
-    showError(`That image is ${formatBytes(file.size)}. The limit is 20 MB.`);
-    return;
-  }
+  view.isActive = () => Boolean(view.job && ["queued", "running"].includes(view.job.status));
 
-  hideError();
-  if (state.previewUrl) URL.revokeObjectURL(state.previewUrl);
-  state.file = file;
-  state.previewUrl = URL.createObjectURL(file);
-
-  el.originalImage.src = state.previewUrl;
-  el.originalImage.hidden = false;
-  el.dropzoneEmpty.hidden = true;
-  el.dropzone.classList.add("has-image");
-  el.fileMeta.textContent = `${file.name || "Pasted image"} · ${formatBytes(file.size)}`;
-  el.originalImage.onload = () => {
-    const { naturalWidth: w, naturalHeight: h } = el.originalImage;
-    el.fileMeta.textContent = `${file.name || "Pasted image"} · ${w} × ${h} · ${formatBytes(file.size)}`;
+  view.reset = () => {
+    ui.readerPages.replaceChildren();
+    ui.readerEmpty.hidden = false;
+    ui.progress.hidden = true;
+    ui.progressBar.style.width = "0";
+    ui.meta.textContent = "";
+    ui.status.textContent = "";
+    ui.cancelBtn.hidden = true;
+    ui.downloadBtn.removeAttribute("href");
+    ui.downloadBtn.removeAttribute("download");
+    ui.downloadBtn.setAttribute("aria-disabled", "true");
   };
 
-  resetResult();
-  updateButtons();
-}
+  view.follow = (job) => {
+    clearTimeout(view.pollTimer);
+    if (!view.job || view.job.id !== job.id) view.reset();
+    view.job = job;
+    storageSet(storageKey, job.id);
+    render(job);
+    if (view.isActive()) view.pollTimer = setTimeout(poll, POLL_INTERVAL_MS);
+    onChange();
+  };
 
-function clearFile() {
-  if (state.previewUrl) URL.revokeObjectURL(state.previewUrl);
-  state.file = null;
-  state.previewUrl = null;
-  el.fileInput.value = "";
-  el.originalImage.removeAttribute("src");
-  el.originalImage.hidden = true;
-  el.dropzoneEmpty.hidden = false;
-  el.dropzone.classList.remove("has-image");
-  el.fileMeta.textContent = "";
-  hideError();
-  resetResult();
-  updateButtons();
-}
-
-function openFilePicker() {
-  if (!state.busy) el.fileInput.click();
-}
-
-function resetResult() {
-  el.resultImage.removeAttribute("src");
-  el.resultImage.hidden = true;
-  el.resultEmpty.hidden = false;
-  el.loading.hidden = true;
-  el.resultMeta.textContent = "";
-  el.downloadBtn.removeAttribute("href");
-  el.downloadBtn.setAttribute("aria-disabled", "true");
-}
-
-function setBusy(busy) {
-  state.busy = busy;
-  el.loading.hidden = !busy;
-  if (busy) {
-    el.resultEmpty.hidden = true;
-    el.resultImage.hidden = true;
-    const started = performance.now();
-    el.elapsed.textContent = "0 s";
-    state.timer = setInterval(() => {
-      el.elapsed.textContent = `${Math.round((performance.now() - started) / 1000)} s`;
-    }, 500);
-  } else {
-    clearInterval(state.timer);
+  async function poll() {
+    if (!view.job) return;
+    try {
+      view.follow(await getJson(`/api/jobs/${view.job.id}`));
+    } catch (error) {
+      if (error.status === 404) {
+        forget();
+        showError("The server no longer knows this job (it probably restarted). Start it again.");
+        return;
+      }
+      // Keep trying: the server may be busy or briefly unreachable.
+      if (error instanceof TypeError) setStatus("offline", "Server offline");
+      view.pollTimer = setTimeout(poll, POLL_INTERVAL_MS * 3);
+    }
   }
-  el.translateBtn.textContent = busy ? "Translating" : "Translate";
-  updateButtons();
+
+  function forget() {
+    storageSet(storageKey, null);
+    view.job = null;
+    view.reset();
+    onChange();
+  }
+
+  view.cancel = async () => {
+    if (!view.job) return;
+    try {
+      view.follow(await getJson(`/api/jobs/${view.job.id}`, { method: "DELETE" }));
+    } catch (error) {
+      reportFailure(error, "cancelling");
+    }
+  };
+
+  view.resume = async () => {
+    const jobId = storageGet(storageKey);
+    if (!jobId) return;
+    try {
+      view.follow(await getJson(`/api/jobs/${jobId}`));
+    } catch {
+      storageSet(storageKey, null);
+    }
+  };
+
+  function ensurePageSlots(job) {
+    for (let index = ui.readerPages.children.length; index < job.total; index += 1) {
+      const figure = document.createElement("figure");
+      figure.className = "reader-page";
+      const placeholder = document.createElement("div");
+      placeholder.className = "page-placeholder";
+      placeholder.textContent = `Page ${index + 1}`;
+      figure.append(placeholder);
+      ui.readerPages.append(figure);
+    }
+  }
+
+  function render(job) {
+    const info = job.chapter || {};
+    ui.meta.textContent = [info.manga_title, info.label].filter(Boolean).join(DOT);
+    ui.readerEmpty.hidden = job.total > 0;
+    ensurePageSlots(job);
+
+    for (const index of job.completed) {
+      const figure = ui.readerPages.children[index];
+      if (!figure || figure.querySelector("img")) continue;
+      const image = document.createElement("img");
+      image.loading = "lazy";
+      image.alt = `Page ${index + 1}`;
+      image.src = api(`/api/jobs/${job.id}/pages/${index}`);
+      figure.replaceChildren(image);
+    }
+    for (const index of job.failed_pages) {
+      const placeholder = ui.readerPages.children[index]?.querySelector(".page-placeholder");
+      if (placeholder) {
+        placeholder.classList.add("is-failed");
+        placeholder.textContent = `Page ${index + 1} could not be translated`;
+      }
+    }
+
+    const finished = job.completed.length + job.failed_pages.length;
+    ui.progress.hidden = !job.total || job.status === "done";
+    ui.progressBar.style.width = job.total ? `${(finished / job.total) * 100}%` : "0";
+    ui.cancelBtn.hidden = !view.isActive();
+
+    const notes = [];
+    if (job.status === "queued") notes.push("Waiting for the previous job to finish");
+    else if (job.status === "running") {
+      notes.push(job.total ? `Translating page ${Math.min(finished + 1, job.total)} of ${job.total}` : "Getting the pages");
+      notes.push(formatDuration(job.elapsed));
+    } else if (job.status === "done") notes.push(`Done: ${plural(job.completed.length, "page")} in ${formatDuration(job.elapsed)}`);
+    else if (job.status === "cancelled") notes.push("Cancelled");
+    else if (job.status === "error") notes.push("Failed");
+    if (job.failed_pages.length) notes.push(`${job.failed_pages.length} failed`);
+    if (job.untranslated) notes.push(`${plural(job.untranslated, "bubble")} left untranslated`);
+    ui.status.textContent = notes.join(DOT);
+    if (job.status === "error" && job.error) showError(`Translation failed: ${job.error}`);
+
+    const ready = job.status === "done" && job.completed.length > 0;
+    const single = job.kind === "upload" && job.total === 1 && ready;
+    if (!ready) {
+      ui.downloadBtn.removeAttribute("href");
+    } else if (single) {
+      // One page: download the image itself rather than a ZIP.
+      ui.downloadBtn.href = api(`/api/jobs/${job.id}/pages/${job.completed[0]}`);
+      ui.downloadBtn.download = job.page_names?.[String(job.completed[0])] || `page_${job.target_lang}.png`;
+    } else {
+      ui.downloadBtn.href = api(`/api/jobs/${job.id}/download`);
+      ui.downloadBtn.removeAttribute("download");
+    }
+    if (prefix === "up") ui.downloadBtn.textContent = single ? "Download page" : "Download ZIP";
+    ui.downloadBtn.setAttribute("aria-disabled", String(!ready));
+  }
+
+  ui.cancelBtn.addEventListener("click", view.cancel);
+  return view;
 }
 
-function updateButtons() {
-  el.translateBtn.disabled = !state.file || state.busy;
-  el.clearBtn.disabled = !state.file || state.busy;
-  el.sourceLang.disabled = state.busy;
-  el.targetLang.disabled = state.busy;
+// ==== Upload pages ==========================================================
+
+function isImage(file, path) {
+  return ACCEPTED_TYPES.includes(file.type) || IMAGE_NAME.test(path);
 }
 
-function outputName(file) {
-  const base = (file.name || "page").replace(/\.[^.]+$/, "");
-  return `${base}_${el.targetLang.value}.png`;
+function comparePaths(a, b) {
+  return a.path.localeCompare(b.path, undefined, { numeric: true, sensitivity: "base" });
 }
 
-function showResult(data, seconds, file) {
-  const url = `data:${data.mime_type || "image/png"};base64,${data.output_image}`;
-  el.resultImage.src = url;
-  el.resultImage.hidden = false;
-  el.resultEmpty.hidden = true;
+// Walks dropped folders. Entries must be taken from the event synchronously,
+// before anything is awaited, or the browser discards them.
+async function collectDropped(dataTransfer) {
+  const entries = [...dataTransfer.items]
+    .filter((item) => item.kind === "file")
+    .map((item) => item.webkitGetAsEntry?.())
+    .filter(Boolean);
+  if (!entries.length) return [...dataTransfer.files].map((file) => ({ file, path: file.name }));
 
-  el.downloadBtn.href = url;
-  el.downloadBtn.download = outputName(file);
-  el.downloadBtn.setAttribute("aria-disabled", "false");
-
-  const regions = data.regions || [];
-  const translated = regions.filter((region) => region.translation).length;
-  const noun = regions.length === 1 ? "text region" : "text regions";
-  el.resultMeta.textContent = `${translated} of ${regions.length} ${noun} translated in ${seconds.toFixed(1)} s`;
+  const found = [];
+  const readFile = (entry) => new Promise((resolve, reject) => entry.file(resolve, reject));
+  const readBatch = (reader) => new Promise((resolve, reject) => reader.readEntries(resolve, reject));
+  async function walk(entry, prefix) {
+    if (entry.isFile) {
+      found.push({ file: await readFile(entry), path: `${prefix}${entry.name}` });
+    } else if (entry.isDirectory) {
+      const reader = entry.createReader();
+      for (let batch = await readBatch(reader); batch.length; batch = await readBatch(reader)) {
+        for (const child of batch) await walk(child, `${prefix}${entry.name}/`);
+      }
+    }
+  }
+  for (const entry of entries) await walk(entry, "");
+  return found;
 }
 
-async function translatePage() {
-  if (!state.file || state.busy) return;
+function addItems(candidates) {
+  if (state.uploading) return;
+  hideError();
+  const known = new Set(state.items.map((item) => `${item.path}:${item.file.size}`));
+  let skipped = 0;
+  let tooBig = 0;
+  let duplicate = 0;
+  for (const { file, path } of candidates) {
+    if (!isImage(file, path)) {
+      skipped += 1;
+    } else if (file.size > MAX_FILE_BYTES) {
+      tooBig += 1;
+    } else if (known.has(`${path}:${file.size}`)) {
+      duplicate += 1;
+    } else if (state.items.length < MAX_PAGES) {
+      state.items.push({ file, path, url: URL.createObjectURL(file) });
+      known.add(`${path}:${file.size}`);
+    }
+  }
+  state.items.sort(comparePaths);
+
+  const notes = [];
+  if (skipped) notes.push(`skipped ${plural(skipped, "file")} that ${skipped === 1 ? "is" : "are"} not an image`);
+  if (tooBig) notes.push(`skipped ${plural(tooBig, "image")} over 20 MB`);
+  if (candidates.length - skipped - tooBig - duplicate > 0 && state.items.length >= MAX_PAGES) {
+    notes.push(`only the first ${MAX_PAGES} pages were kept`);
+  }
+  if (notes.length) showError(`Added the pages, but ${notes.join(" and ")}.`);
+  renderItems();
+}
+
+function removeItem(index) {
+  const [item] = state.items.splice(index, 1);
+  if (item) URL.revokeObjectURL(item.url);
+  renderItems();
+}
+
+function clearItems() {
+  for (const item of state.items) URL.revokeObjectURL(item.url);
+  state.items = [];
+  el.fileInput.value = "";
+  el.folderInput.value = "";
+  hideError();
+  renderItems();
+}
+
+function renderItems() {
+  const count = state.items.length;
+  el.dropzoneEmpty.hidden = count > 0;
+  el.thumbGrid.hidden = count === 0;
+  el.dropzone.classList.toggle("has-items", count > 0);
+  const bytes = state.items.reduce((sum, item) => sum + item.file.size, 0);
+  el.uploadMeta.textContent = count ? `${plural(count, "page")}${DOT}${formatBytes(bytes)}` : "";
+
+  const tiles = state.items.map((item, index) => {
+    const tile = document.createElement("li");
+    tile.className = "thumb";
+    const image = document.createElement("img");
+    image.src = item.url;
+    image.alt = "";
+    image.loading = "lazy";
+    const label = document.createElement("span");
+    label.className = "thumb-label";
+    label.title = item.path;
+    const number = document.createElement("span");
+    number.className = "thumb-number";
+    number.textContent = String(index + 1);
+    label.append(number, item.path.split("/").pop());
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.className = "thumb-remove";
+    remove.dataset.index = String(index);
+    remove.setAttribute("aria-label", `Remove ${item.path}`);
+    remove.innerHTML = REMOVE_ICON;
+    remove.disabled = state.uploading;
+    tile.append(image, label, remove);
+    return tile;
+  });
+  if (count) {
+    const add = document.createElement("li");
+    add.className = "thumb-add";
+    for (const [text, input] of [["Add files", el.fileInput], ["Add folder", el.folderInput]]) {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "btn btn-ghost";
+      button.textContent = text;
+      button.disabled = state.uploading;
+      button.addEventListener("click", () => input.click());
+      add.append(button);
+    }
+    tiles.push(add);
+  }
+  el.thumbGrid.replaceChildren(...tiles);
+  updateUploadButtons();
+}
+
+function updateUploadButtons() {
+  const busy = state.uploading || uploadJob.isActive();
+  const count = state.items.length;
+  el.translateBtn.disabled = !count || busy;
+  el.translateBtn.textContent = state.uploading
+    ? "Uploading"
+    : uploadJob.isActive() ? "Translating" : count > 1 ? `Translate ${count} pages` : "Translate";
+  el.clearBtn.disabled = !count || state.uploading;
+  el.sourceLang.disabled = state.uploading;
+  el.targetLang.disabled = state.uploading;
+}
+
+function batchTitle() {
+  const folders = new Set(state.items.map((item) => (item.path.includes("/") ? item.path.split("/")[0] : "")));
+  if (folders.size === 1 && !folders.has("")) return [...folders][0];
+  if (state.items.length === 1) return state.items[0].path.replace(/\.[^.]+$/, "");
+  return "Translated pages";
+}
+
+async function translateItems() {
+  if (!state.items.length || state.uploading || uploadJob.isActive()) return;
   hideError();
   if (!(await ensureServer())) return;
 
-  const file = state.file;
   const form = new FormData();
-  form.append("file", file, file.name || "page.png");
+  for (const item of state.items) form.append("files", item.file, item.path);
   form.append("source_lang", el.sourceLang.value);
   form.append("target_lang", el.targetLang.value);
+  form.append("title", batchTitle());
 
-  setBusy(true);
-  const started = performance.now();
+  state.uploading = true;
+  renderItems();
   try {
-    const data = await getJson("/api/translate", { method: "POST", body: form });
-    if (state.file !== file) return; // The user picked another image meanwhile.
-    showResult(data, (performance.now() - started) / 1000, file);
+    uploadJob.follow(await getJson("/api/uploads", { method: "POST", body: form }));
   } catch (error) {
-    if (state.file !== file) return;
-    resetResult();
-    if (error instanceof TypeError) reportFailure(error, "translating");
-    else showError(`Translation failed: ${error.message}`);
+    reportFailure(error, "uploading the pages");
   } finally {
-    setBusy(false);
+    state.uploading = false;
+    renderItems();
   }
 }
 
-// ==== MangaDex chapter =====================================================
+// ==== MangaDex chapter ======================================================
 
 function setChapterListMessage(message) {
   el.chapterEmpty.textContent = message;
@@ -366,13 +550,11 @@ function setChapterListMessage(message) {
 }
 
 function updateChapterButton() {
-  const running = state.job && ["queued", "running"].includes(state.job.status);
-  el.chapterTranslateBtn.disabled = !state.selectedChapter || !el.chapterSource.value || running;
+  el.chapterTranslateBtn.disabled = !state.selectedChapter || !el.chapterSource.value || chapterJob.isActive();
   if (!state.selectedChapter) {
     el.selectionNote.textContent = state.chapters.length ? "Pick a chapter from the list." : "";
   } else {
-    const chapter = state.selectedChapter;
-    el.selectionNote.textContent = `${chapter.label} · ${chapter.pages} pages`;
+    el.selectionNote.textContent = `${state.selectedChapter.label}${DOT}${state.selectedChapter.pages} pages`;
   }
 }
 
@@ -419,8 +601,8 @@ function showManga(manga) {
   el.pickerRow.hidden = false;
   el.mangaTitle.textContent = manga.title;
   const original = manga.original_language ? `Original: ${languageLabel(manga.original_language)}` : "";
-  const count = `${manga.languages.length} ${manga.languages.length === 1 ? "language" : "languages"} on MangaDex`;
-  el.mangaSub.textContent = [original, count].filter(Boolean).join(" · ");
+  const count = `${plural(manga.languages.length, "language")} on MangaDex`;
+  el.mangaSub.textContent = [original, count].filter(Boolean).join(DOT);
 
   const languages = [...manga.languages].sort(
     (a, b) => Number(b.supported) - Number(a.supported) || a.name.localeCompare(b.name)
@@ -464,7 +646,7 @@ async function loadChapters(selectId = null) {
   if (el.chapterSource.value !== lang) return; // The language changed meanwhile.
 
   state.chapters = chapters;
-  el.chapterCount.textContent = `${chapters.length} ${chapters.length === 1 ? "chapter" : "chapters"}`;
+  el.chapterCount.textContent = plural(chapters.length, "chapter");
   renderChapterList();
   if (selectId) selectChapter(selectId, { scroll: true });
   updateChapterButton();
@@ -478,7 +660,6 @@ function renderChapterList() {
   const rows = state.chapters.map((chapter) => {
     const row = document.createElement("label");
     row.className = "chapter-row";
-    row.dataset.id = chapter.id;
     row.dataset.search = `${chapter.chapter || ""} ${chapter.title} ${chapter.volume || ""}`.toLowerCase();
 
     const input = document.createElement("input");
@@ -497,7 +678,7 @@ function renderChapterList() {
 
     const extra = document.createElement("span");
     extra.className = "chapter-extra";
-    extra.textContent = [chapter.group, `${chapter.pages} p`].filter(Boolean).join(" · ");
+    extra.textContent = [chapter.group, `${chapter.pages} p`].filter(Boolean).join(DOT);
 
     row.append(input, number, title, extra);
     return row;
@@ -529,12 +710,15 @@ function selectChapter(id, { scroll = false } = {}) {
   const input = el.chapterList.querySelector(`input[value="${CSS.escape(id)}"]`);
   if (input) {
     input.checked = true;
-    if (scroll) input.closest(".chapter-row").scrollIntoView({ block: "center" });
+    if (scroll) {
+      // Scroll only the list; scrollIntoView would also move the whole page.
+      const row = input.closest(".chapter-row").getBoundingClientRect();
+      const list = el.chapterList.getBoundingClientRect();
+      el.chapterList.scrollTop += row.top - list.top - (list.height - row.height) / 2;
+    }
   }
   updateChapterButton();
 }
-
-// ---- Chapter jobs ---------------------------------------------------------
 
 async function startChapterJob() {
   if (!state.selectedChapter) return;
@@ -542,7 +726,7 @@ async function startChapterJob() {
   if (!(await ensureServer())) return;
   el.chapterTranslateBtn.disabled = true;
   try {
-    const job = await getJson("/api/jobs", {
+    chapterJob.follow(await getJson("/api/jobs", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -550,137 +734,17 @@ async function startChapterJob() {
         source_lang: el.chapterSource.value,
         target_lang: el.chapterTarget.value,
       }),
-    });
-    followJob(job);
+    }));
   } catch (error) {
     reportFailure(error, "starting the translation");
     updateChapterButton();
   }
 }
 
-function followJob(job) {
-  clearTimeout(state.pollTimer);
-  if (!state.job || state.job.id !== job.id) resetReader();
-  state.job = job;
-  storageSet(JOB_STORAGE_KEY, job.id);
-  renderJob(job);
-  if (["queued", "running"].includes(job.status)) state.pollTimer = setTimeout(pollJob, POLL_INTERVAL_MS);
-}
-
-async function pollJob() {
-  if (!state.job) return;
-  try {
-    followJob(await getJson(`/api/jobs/${state.job.id}`));
-  } catch (error) {
-    if (error.status === 404) {
-      storageSet(JOB_STORAGE_KEY, null);
-      state.job = null;
-      resetReader();
-      showError("The server no longer knows this chapter job (it probably restarted). Start it again; finished pages are reused.");
-      updateChapterButton();
-      return;
-    }
-    // Keep trying: the server may be busy or briefly unreachable.
-    if (error instanceof TypeError) setStatus("offline", "Server offline");
-    state.pollTimer = setTimeout(pollJob, POLL_INTERVAL_MS * 3);
-  }
-}
-
-async function cancelJob() {
-  if (!state.job) return;
-  try {
-    followJob(await getJson(`/api/jobs/${state.job.id}`, { method: "DELETE" }));
-  } catch (error) {
-    reportFailure(error, "cancelling");
-  }
-}
-
-function resetReader() {
-  el.readerPages.replaceChildren();
-  el.readerEmpty.hidden = false;
-  el.jobProgress.hidden = true;
-  el.jobProgressBar.style.width = "0";
-  el.jobMeta.textContent = "";
-  el.jobStatus.textContent = "";
-  el.jobCancelBtn.hidden = true;
-  el.zipBtn.removeAttribute("href");
-  el.zipBtn.setAttribute("aria-disabled", "true");
-}
-
-function ensurePageSlots(job) {
-  const pages = el.readerPages;
-  for (let index = pages.children.length; index < job.total; index += 1) {
-    const figure = document.createElement("figure");
-    figure.className = "reader-page";
-    figure.dataset.index = String(index);
-    const placeholder = document.createElement("div");
-    placeholder.className = "page-placeholder";
-    placeholder.textContent = `Page ${index + 1}`;
-    figure.append(placeholder);
-    pages.append(figure);
-  }
-}
-
-function renderJob(job) {
-  const chapter = job.chapter || {};
-  el.jobMeta.textContent = [chapter.manga_title, chapter.label].filter(Boolean).join(" · ");
-  el.readerEmpty.hidden = job.total > 0;
-  ensurePageSlots(job);
-
-  for (const index of job.completed) {
-    const figure = el.readerPages.children[index];
-    if (!figure || figure.querySelector("img")) continue;
-    const image = document.createElement("img");
-    image.loading = "lazy";
-    image.alt = `Page ${index + 1}`;
-    image.src = api(`/api/jobs/${job.id}/pages/${index}`);
-    figure.replaceChildren(image);
-  }
-  for (const index of job.failed_pages) {
-    const placeholder = el.readerPages.children[index]?.querySelector(".page-placeholder");
-    if (placeholder) {
-      placeholder.classList.add("is-failed");
-      placeholder.textContent = `Page ${index + 1} could not be translated`;
-    }
-  }
-
-  const finished = job.completed.length + job.failed_pages.length;
-  const active = ["queued", "running"].includes(job.status);
-  el.jobProgress.hidden = !job.total || job.status === "done";
-  el.jobProgressBar.style.width = job.total ? `${(finished / job.total) * 100}%` : "0";
-  el.jobCancelBtn.hidden = !active;
-
-  const notes = [];
-  if (job.status === "queued") notes.push("Waiting for the previous chapter to finish");
-  else if (job.status === "running") {
-    notes.push(job.total ? `Translating page ${Math.min(finished + 1, job.total)} of ${job.total}` : "Fetching the chapter");
-    notes.push(formatDuration(job.elapsed));
-  } else if (job.status === "done") notes.push(`Done: ${job.completed.length} pages in ${formatDuration(job.elapsed)}`);
-  else if (job.status === "cancelled") notes.push("Cancelled");
-  else if (job.status === "error") notes.push("Failed");
-  if (job.failed_pages.length) notes.push(`${job.failed_pages.length} failed`);
-  if (job.untranslated) notes.push(`${job.untranslated} bubbles left untranslated`);
-  el.jobStatus.textContent = notes.join(" · ");
-  if (job.status === "error" && job.error) showError(`Chapter translation failed: ${job.error}`);
-
-  const ready = job.status === "done" && job.completed.length > 0;
-  if (ready) el.zipBtn.href = api(`/api/jobs/${job.id}/download`);
-  else el.zipBtn.removeAttribute("href");
-  el.zipBtn.setAttribute("aria-disabled", String(!ready));
-  updateChapterButton();
-}
-
-async function resumeSavedJob() {
-  const jobId = storageGet(JOB_STORAGE_KEY);
-  if (!jobId) return;
-  try {
-    followJob(await getJson(`/api/jobs/${jobId}`));
-  } catch {
-    storageSet(JOB_STORAGE_KEY, null);
-  }
-}
-
 // ---- Wiring ---------------------------------------------------------------
+
+const uploadJob = createJobView("up", { storageKey: "mantran.uploadJob", onChange: () => updateUploadButtons() });
+const chapterJob = createJobView("ch", { storageKey: "mantran.chapterJob", onChange: () => updateChapterButton() });
 
 for (const tab of el.tabs) {
   tab.addEventListener("click", () => showView(tab.id.replace("tab-", "")));
@@ -692,43 +756,59 @@ for (const tab of el.tabs) {
 }
 window.addEventListener("hashchange", () => showView(viewFromHash()));
 
-el.dropzone.addEventListener("click", openFilePicker);
-el.dropzone.addEventListener("keydown", (event) => {
-  if (event.key === "Enter" || event.key === " ") {
-    event.preventDefault();
-    openFilePicker();
-  }
+el.chooseFilesBtn.addEventListener("click", () => el.fileInput.click());
+el.chooseFolderBtn.addEventListener("click", () => el.folderInput.click());
+el.fileInput.addEventListener("change", () => {
+  addItems([...el.fileInput.files].map((file) => ({ file, path: file.name })));
+  el.fileInput.value = "";
 });
-el.fileInput.addEventListener("change", () => setFile(el.fileInput.files[0]));
+el.folderInput.addEventListener("change", () => {
+  addItems([...el.folderInput.files].map((file) => ({ file, path: file.webkitRelativePath || file.name })));
+  el.folderInput.value = "";
+});
+el.thumbGrid.addEventListener("click", (event) => {
+  const remove = event.target.closest(".thumb-remove");
+  if (remove && !state.uploading) removeItem(Number(remove.dataset.index));
+});
 
 ["dragenter", "dragover"].forEach((type) =>
   el.dropzone.addEventListener(type, (event) => {
     event.preventDefault();
-    if (!state.busy) el.dropzone.classList.add("is-dragging");
+    if (!state.uploading) el.dropzone.classList.add("is-dragging");
   })
 );
-["dragleave", "drop"].forEach((type) =>
-  el.dropzone.addEventListener(type, (event) => {
-    event.preventDefault();
-    el.dropzone.classList.remove("is-dragging");
-  })
-);
-el.dropzone.addEventListener("drop", (event) => {
-  if (!state.busy) setFile(event.dataTransfer.files[0]);
+el.dropzone.addEventListener("dragleave", (event) => {
+  if (!el.dropzone.contains(event.relatedTarget)) el.dropzone.classList.remove("is-dragging");
+});
+el.dropzone.addEventListener("drop", async (event) => {
+  event.preventDefault();
+  el.dropzone.classList.remove("is-dragging");
+  if (state.uploading) return;
+  try {
+    addItems(await collectDropped(event.dataTransfer));
+  } catch {
+    showError("Could not read the dropped files. Try Choose files or Choose folder instead.");
+  }
 });
 // Dropping outside the drop zone should not navigate away to the image.
 window.addEventListener("dragover", (event) => event.preventDefault());
 window.addEventListener("drop", (event) => event.preventDefault());
 
 document.addEventListener("paste", (event) => {
-  if (state.busy || $("view-page").hidden) return;
-  const item = [...event.clipboardData.items].find((entry) => entry.type.startsWith("image/"));
-  if (item) setFile(item.getAsFile());
+  if (state.uploading || $("view-page").hidden) return;
+  const files = [...event.clipboardData.items]
+    .filter((entry) => entry.type.startsWith("image/"))
+    .map((entry) => entry.getAsFile())
+    .filter(Boolean);
+  const stamp = new Date().toISOString().replace(/\D/g, "").slice(0, 14);
+  if (files.length) {
+    addItems(files.map((file, i) => ({ file, path: `pasted_${stamp}_${i + 1}.${file.type.split("/")[1] || "png"}` })));
+  }
 });
 
 el.sourceLang.addEventListener("change", () => syncTargetOptions(el.sourceLang, el.targetLang));
-el.translateBtn.addEventListener("click", translatePage);
-el.clearBtn.addEventListener("click", clearFile);
+el.translateBtn.addEventListener("click", translateItems);
+el.clearBtn.addEventListener("click", clearItems);
 el.errorClose.addEventListener("click", hideError);
 
 el.linkForm.addEventListener("submit", loadLink);
@@ -742,11 +822,12 @@ el.chapterList.addEventListener("change", (event) => {
   if (event.target.name === "chapter") selectChapter(event.target.value);
 });
 el.chapterTranslateBtn.addEventListener("click", startChapterJob);
-el.jobCancelBtn.addEventListener("click", cancelJob);
 
 showView(viewFromHash());
+renderItems();
 checkServer().then((online) => {
   if (!online) return;
   loadLanguages();
-  resumeSavedJob();
+  uploadJob.resume();
+  chapterJob.resume();
 });

@@ -210,7 +210,8 @@ body {
   position: relative;
   display: grid;
   place-items: center;
-  height: min(68vh, 780px);
+  /* Fill the window below the header, panel title and controls. */
+  height: clamp(320px, calc(100vh - 300px), 780px);
   min-height: 320px;
   margin: 18px;
   border-radius: 10px;
@@ -408,6 +409,119 @@ select:focus-visible,
   pointer-events: none;
 }
 
+/* Upload: page thumbnails */
+
+.empty-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 10px;
+  margin: 14px 0 6px;
+}
+
+.dropzone.has-items {
+  display: block;
+  overflow-y: auto;
+  cursor: default;
+}
+
+.thumb-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(112px, 1fr));
+  gap: 12px;
+  margin: 0;
+  padding: 12px;
+  list-style: none;
+}
+
+.thumb {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+.thumb img {
+  width: 100%;
+  height: auto;
+  aspect-ratio: 5 / 7;
+  object-fit: cover;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--navy-950);
+}
+
+.thumb-label {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.thumb-number {
+  margin-right: 6px;
+  color: var(--white);
+  font-weight: 600;
+}
+
+.thumb-remove {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: 1px solid var(--line-strong);
+  border-radius: 50%;
+  background: rgba(4, 6, 11, 0.85);
+  color: var(--white);
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+
+.thumb:hover .thumb-remove,
+.thumb-remove:focus-visible {
+  opacity: 1;
+}
+
+.thumb-remove:focus-visible {
+  outline: 2px solid var(--blue-soft);
+  outline-offset: 1px;
+}
+
+.thumb-remove svg {
+  width: 12px;
+  height: 12px;
+}
+
+.thumb-add {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 8px;
+  aspect-ratio: 5 / 7;
+  padding: 10px;
+  border: 1.5px dashed var(--line-strong);
+  border-radius: 6px;
+}
+
+.thumb-add .btn {
+  height: 34px;
+  padding: 0 10px;
+  font-size: 13px;
+}
+
+@media (hover: none) {
+  .thumb-remove {
+    opacity: 1;
+  }
+}
+
 /* Mode tabs */
 
 .tabs {
@@ -547,6 +661,9 @@ input:focus-visible {
 }
 
 .chapter-row {
+  /* Positioned so the hidden radio button stays inside the row (and so inside
+     the scrolling list) instead of stretching the page and pulling focus to it. */
+  position: relative;
   display: grid;
   grid-template-columns: minmax(64px, auto) minmax(0, 1fr) auto;
   align-items: baseline;
@@ -572,6 +689,11 @@ input:focus-visible {
 
 .chapter-row input {
   position: absolute;
+  top: 0;
+  left: 0;
+  width: 1px;
+  height: 1px;
+  margin: 0;
   opacity: 0;
   pointer-events: none;
 }

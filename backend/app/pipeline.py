@@ -9,10 +9,10 @@ import cv2
 import numpy as np
 
 from .cleaning import erase_region, find_bubble_interior
-from .detection import TextRegion, detect_regions, pad_box
+from .detection import TextRegion, detect_regions, pad_box, reading_order
 from .languages import check_pair, get_language
 from .ocr import read_region
-from .translation import translate_texts
+from .translation import TranslationContext, translate_texts
 from .typesetting import layout_text, draw_layouts
 
 # Small scans are upscaled first so the English lettering stays legible.
@@ -56,10 +56,14 @@ def _text_area(region: TextRegion, interior, image_shape):
     return box, None
 
 
-def translate_image(image, source_lang="ja", target_lang="en", use_detector=True, scale=0):
+def translate_image(image, source_lang="ja", target_lang="en", use_detector=True, scale=0,
+                    context: TranslationContext | None = None, right_to_left: bool | None = None):
     """Translate a BGR page image. Returns ``(result_image, metadata)``.
 
     ``scale`` upsamples the page before processing; ``0`` picks it automatically.
+    ``context`` carries earlier pages of the same chapter (and is updated with
+    this one). ``right_to_left`` is the page's reading direction; by default,
+    Japanese pages are read right to left.
     """
     check_pair(source_lang, target_lang)
     font_ratio = FONT_TO_GLYPH_RATIO[get_language(source_lang).square_glyphs]
@@ -67,14 +71,19 @@ def translate_image(image, source_lang="ja", target_lang="en", use_detector=True
     if scale != 1:
         image = cv2.resize(image, None, fx=scale, fy=scale, interpolation=cv2.INTER_LANCZOS4)
 
-    regions = detect_regions(image, use_model=use_detector)
+    if right_to_left is None:
+        right_to_left = source_lang == "ja"
+    regions = reading_order(detect_regions(image, use_model=use_detector), right_to_left)
     min_font = max(8, round(max(image.shape[:2]) * 0.012))
     page_max_font = max(min_font, round(max(image.shape[:2]) * MAX_FONT_TO_PAGE))
 
     interiors = [find_bubble_interior(image, region) for region in regions]
     sources = [read_region(image, region, source_lang, interior) for region, interior in zip(regions, interiors)]
-    # The whole page in one batch: fewer requests to the online translators.
-    translations = translate_texts(sources, src=source_lang, dst=target_lang)
+    # The whole page in one batch, in reading order: fewer requests, and the
+    # translator sees each bubble next to the ones around it.
+    translations = translate_texts(sources, src=source_lang, dst=target_lang, context=context)
+    if context is not None:
+        context.add(sources, translations)
 
     result = image
     layouts = []
@@ -85,6 +94,8 @@ def translate_image(image, source_lang="ja", target_lang="en", use_detector=True
             "bubble_box": region.bubble_box,
             "text": source,
             "translation": translation or "",
+            # True when no translator could handle it; "" (not real text) is a deliberate skip.
+            "failed": bool(source) and translation is None,
         })
         if not translation:
             # Nothing to put back: leave the original lettering untouched.

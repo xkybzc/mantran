@@ -140,6 +140,24 @@ def _reading_order(boxes: list[Box]) -> list[Box]:
     return sorted(boxes, key=lambda b: b[1])
 
 
+def reading_order(regions: list[TextRegion], right_to_left: bool) -> list[TextRegion]:
+    """Order regions the way the page is read: rows of vertically overlapping
+    regions from top to bottom, each row right to left (manga) or left to right."""
+    rows: list[tuple[list[int], list[TextRegion]]] = []
+    for region in sorted(regions, key=lambda r: r.text_box[1]):
+        _, y0, _, y1 = region.text_box
+        for span, members in rows:
+            overlap = min(y1, span[1]) - max(y0, span[0])
+            if overlap > 0.5 * min(y1 - y0, span[1] - span[0]):
+                members.append(region)
+                span[0], span[1] = min(span[0], y0), max(span[1], y1)
+                break
+        else:
+            rows.append(([y0, y1], [region]))
+    key = (lambda r: -r.text_box[2]) if right_to_left else (lambda r: r.text_box[0])
+    return [region for _, members in rows for region in sorted(members, key=key)]
+
+
 def group_detections(detections) -> list[TextRegion]:
     """Attach each detected text box to the bubble that contains it."""
     bubbles = [box for label, _, box in detections if label == LABEL_BUBBLE]

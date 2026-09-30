@@ -116,6 +116,80 @@ def clean_ocr_text(text: str) -> str:
     return " ".join(text.split())
 
 
+# Letters Tesseract mixes up in comic lettering: misread -> what it usually was.
+_CONFUSIONS = {
+    "d": "j", "s": "j", "i": "lj", "l": "i", "1": "li", "0": "o", "5": "s", "c": "e", "e": "c",
+    "n": "h", "h": "n", "u": "v", "v": "u", "o": "a", "a": "o", "t": "f", "f": "t", "£": "f", "€": "e",
+}
+_CONFUSIONS.update({k.upper(): v.upper() for k, v in list(_CONFUSIONS.items()) if k.isalpha()})
+_CONFUSIONS["S"] += "j"  # a misread capital S is often a lowercase j ("Suego" -> "juego")
+_MULTI_CONFUSIONS = (("rn", "m"), ("cl", "d"), ("vv", "w"), ("RN", "M"), ("CL", "D"), ("VV", "W"))
+# Latin-script languages with a word-frequency list to check corrections against.
+_WORD_FIX_LANGS = {"en", "es", "pt", "id", "fr", "it", "de", "tr", "pl"}
+KNOWN_WORD_ZIPF = 2.0      # at least this common: leave the word alone
+CORRECTION_MIN_ZIPF = 3.0  # a replacement must be at least this common
+
+
+def _variants_by_edits(word: str, max_edits=2) -> list[set[str]]:
+    """Candidate spellings, grouped by how many misreads they undo (1, then 2)."""
+    seen, frontier, levels = {word}, {word}, []
+    for edit in range(max_edits):
+        found = set()
+        for candidate in frontier:
+            for i, ch in enumerate(candidate):
+                for alt in _CONFUSIONS.get(ch, ""):
+                    found.add(candidate[:i] + alt + candidate[i + 1:])
+            for bad, good in _MULTI_CONFUSIONS:
+                start = candidate.find(bad)
+                while start != -1:
+                    found.add(candidate[:start] + good + candidate[start + len(bad):])
+                    start = candidate.find(bad, start + 1)
+            if edit == 0 and len(candidate) >= 5:
+                found.add(candidate[1:])  # a stray mark read as a leading letter
+        frontier = found - seen
+        seen |= frontier
+        levels.append(frontier)
+    return levels
+
+
+def fix_spanish_marks(text: str) -> str:
+    """Tesseract reads the opening "¡" as "i" (e.g. "iHola" or "¿iQué")."""
+    return re.sub(r"(^|[\s¿\"'(])i(?=[A-ZÁÉÍÓÚÑ])", r"\1¡", text)
+
+
+def correct_ocr_words(text: str, language: Language) -> str:
+    """Fix words that are unknown in the language but one or two typical misreads
+    away from a common word (e.g. Spanish "duntas" -> "juntas")."""
+    lang = language.translator
+    if lang not in _WORD_FIX_LANGS:
+        return text
+    try:
+        from wordfreq import zipf_frequency
+    except ImportError:
+        return text
+
+    def fix(match: re.Match) -> str:
+        word = match.group(0)
+        if len(word) < 3:
+            return word
+        original = zipf_frequency(word.lower(), lang)
+        if original >= KNOWN_WORD_ZIPF:
+            return word
+        # Prefer undoing one misread over two ("duntas" -> "juntas", not "juntos").
+        for level in _variants_by_edits(word):
+            scored = [(zipf_frequency(v.lower(), lang), v) for v in level if v.isalpha()]
+            best_score, best = max(scored, default=(0.0, word))
+            if best_score >= CORRECTION_MIN_ZIPF and best_score - original >= 1.5:
+                break
+        else:
+            return word
+        if word.isupper():
+            return best.upper()
+        return best[0].upper() + best[1:] if word[0].isupper() and best[0].isalpha() else best
+
+    return re.sub(r"[\w£€]+", fix, text)
+
+
 def _read_with_tesseract(crop, language: Language, vertical: bool, min_confidence: float) -> str:
     tesseract = _tesseract()
     model = language.tesseract_vertical if vertical and language.tesseract_vertical else language.tesseract
@@ -142,7 +216,11 @@ def _read_with_tesseract(crop, language: Language, vertical: bool, min_confidenc
         return ""
     joiner = language.word_separator
     text = clean_ocr_text(_join_lines([joiner.join(words) for words in lines.values()], joiner or ""))
-    return text if sum(ch.isalpha() for ch in text) >= 2 else ""
+    if sum(ch.isalpha() for ch in text) < 2:
+        return ""
+    if language.code.startswith("es"):
+        text = fix_spanish_marks(text)
+    return correct_ocr_words(text, language)
 
 
 def read_box(image, box: Box, lang="ja", interior=None, min_confidence=MIN_CONFIDENCE) -> str:

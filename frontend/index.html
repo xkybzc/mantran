@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Mantran</title>
-  <meta name="description" content="Translate manga pages and whole MangaDex chapters into English or Vietnamese.">
+  <meta name="description" content="Translate manga pages, folders and whole MangaDex chapters into English or Vietnamese.">
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%231d4ed8'/%3E%3Cpath d='M8 23V9h3l5 7 5-7h3v14h-3v-9l-5 7-5-7v9z' fill='white'/%3E%3C/svg%3E">
   <link rel="stylesheet" href="styles.css">
 </head>
@@ -16,7 +16,7 @@
       <span class="brand-tagline">Manga page translator</span>
     </div>
     <nav class="tabs" role="tablist" aria-label="Mode">
-      <button class="tab" id="tab-page" type="button" role="tab" aria-controls="view-page" aria-selected="true">Single page</button>
+      <button class="tab" id="tab-page" type="button" role="tab" aria-controls="view-page" aria-selected="true">Upload pages</button>
       <button class="tab" id="tab-chapter" type="button" role="tab" aria-controls="view-chapter" aria-selected="false" tabindex="-1">MangaDex chapter</button>
     </nav>
     <div class="status" id="api-status" data-state="checking">
@@ -30,27 +30,31 @@
     <button class="error-close" id="error-close" type="button" aria-label="Dismiss">Close</button>
   </div>
 
-  <!-- Single page: upload on the left, translation on the right -->
+  <!-- Upload: pages or a folder on the left, translations on the right -->
   <main class="workspace" id="view-page" role="tabpanel" aria-labelledby="tab-page">
-    <section class="panel" aria-labelledby="original-title">
+    <section class="panel" aria-labelledby="pages-title">
       <div class="panel-head">
-        <h2 id="original-title">Original</h2>
-        <span class="panel-meta" id="file-meta"></span>
+        <h2 id="pages-title">Pages</h2>
+        <span class="panel-meta" id="upload-meta"></span>
       </div>
 
-      <div class="stage dropzone" id="dropzone" tabindex="0" role="button"
-           aria-label="Upload a manga page. Drop an image, paste it, or press Enter to browse.">
-        <input type="file" id="file-input" accept="image/png,image/jpeg,image/webp,image/bmp" hidden>
+      <div class="stage dropzone" id="dropzone">
+        <input type="file" id="file-input" accept="image/png,image/jpeg,image/webp,image/bmp" multiple hidden>
+        <input type="file" id="folder-input" webkitdirectory multiple hidden>
         <div class="stage-empty" id="dropzone-empty">
           <svg class="upload-icon" viewBox="0 0 48 48" aria-hidden="true">
             <path d="M24 31V11m0 0-8 8m8-8 8 8" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
             <path d="M10 29v6a4 4 0 0 0 4 4h20a4 4 0 0 0 4-4v-6" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round"/>
           </svg>
-          <p class="stage-title">Drop a manga page here</p>
-          <p class="stage-hint">or click to browse, or paste with Ctrl+V</p>
-          <p class="stage-hint small">PNG, JPG, WEBP or BMP, up to 20 MB</p>
+          <p class="stage-title">Drop pages or a whole folder here</p>
+          <p class="stage-hint">Pages are translated in file name order. You can also paste an image with Ctrl+V.</p>
+          <div class="empty-actions">
+            <button class="btn btn-ghost" id="choose-files-btn" type="button">Choose files</button>
+            <button class="btn btn-ghost" id="choose-folder-btn" type="button">Choose folder</button>
+          </div>
+          <p class="stage-hint small">PNG, JPG, WEBP or BMP, up to 20 MB each and 500 pages at a time</p>
         </div>
-        <img id="original-image" alt="Uploaded page" hidden>
+        <ol class="thumb-grid" id="thumb-grid" aria-label="Pages to translate" hidden></ol>
       </div>
 
       <div class="controls">
@@ -68,35 +72,35 @@
           </select>
         </label>
         <div class="actions">
-          <button class="btn btn-ghost" id="clear-btn" type="button" disabled>Remove</button>
+          <button class="btn btn-ghost" id="clear-btn" type="button" disabled>Clear</button>
           <button class="btn btn-primary" id="translate-btn" type="button" disabled>Translate</button>
         </div>
       </div>
     </section>
 
-    <section class="panel" aria-labelledby="translated-title" aria-live="polite">
+    <section class="panel" aria-labelledby="translated-title">
       <div class="panel-head">
         <h2 id="translated-title">Translated</h2>
-        <span class="panel-meta" id="result-meta"></span>
+        <span class="panel-meta" id="up-job-meta"></span>
+      </div>
+      <div class="progress" id="up-job-progress" hidden>
+        <div class="progress-bar" id="up-job-progress-bar"></div>
       </div>
 
-      <div class="stage" id="result-stage">
-        <div class="stage-empty" id="result-empty">
+      <div class="stage reader" id="up-reader">
+        <div class="stage-empty" id="up-reader-empty">
           <p class="stage-title">No translation yet</p>
-          <p class="stage-hint">Upload a page on the left and press Translate.</p>
-        </div>
-        <div class="loading" id="loading" hidden>
-          <div class="spinner" aria-hidden="true"></div>
-          <p class="stage-title">Translating page</p>
-          <p class="stage-hint" id="elapsed">0 s</p>
+          <p class="stage-hint">Add pages on the left and press Translate.</p>
           <p class="stage-hint small">The first page after starting the server loads the models and can take up to a minute.</p>
         </div>
-        <img id="result-image" alt="Translated page" hidden>
+        <div class="reader-pages" id="up-reader-pages"></div>
       </div>
 
       <div class="controls">
+        <span class="note" id="up-job-status" aria-live="polite"></span>
         <div class="actions">
-          <a class="btn btn-primary" id="download-btn" aria-disabled="true">Download PNG</a>
+          <button class="btn btn-ghost" id="up-job-cancel-btn" type="button" hidden>Cancel</button>
+          <a class="btn btn-primary" id="up-download-btn" aria-disabled="true">Download</a>
         </div>
       </div>
     </section>
@@ -159,26 +163,26 @@
     <section class="panel" aria-labelledby="reader-title">
       <div class="panel-head">
         <h2 id="reader-title">Translated chapter</h2>
-        <span class="panel-meta" id="job-meta"></span>
+        <span class="panel-meta" id="ch-job-meta"></span>
       </div>
-      <div class="progress" id="job-progress" hidden>
-        <div class="progress-bar" id="job-progress-bar"></div>
+      <div class="progress" id="ch-job-progress" hidden>
+        <div class="progress-bar" id="ch-job-progress-bar"></div>
       </div>
 
-      <div class="stage reader" id="reader">
-        <div class="stage-empty" id="reader-empty">
+      <div class="stage reader" id="ch-reader">
+        <div class="stage-empty" id="ch-reader-empty">
           <p class="stage-title">No chapter yet</p>
           <p class="stage-hint">Load a title, pick a chapter and press Translate chapter.</p>
           <p class="stage-hint small">Pages appear here as they are translated.</p>
         </div>
-        <div class="reader-pages" id="reader-pages"></div>
+        <div class="reader-pages" id="ch-reader-pages"></div>
       </div>
 
       <div class="controls">
-        <span class="note" id="job-status" aria-live="polite"></span>
+        <span class="note" id="ch-job-status" aria-live="polite"></span>
         <div class="actions">
-          <button class="btn btn-ghost" id="job-cancel-btn" type="button" hidden>Cancel</button>
-          <a class="btn btn-primary" id="zip-btn" aria-disabled="true">Download ZIP</a>
+          <button class="btn btn-ghost" id="ch-job-cancel-btn" type="button" hidden>Cancel</button>
+          <a class="btn btn-primary" id="ch-download-btn" aria-disabled="true">Download ZIP</a>
         </div>
       </div>
     </section>

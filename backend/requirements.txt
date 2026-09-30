@@ -6,8 +6,10 @@ torch
 transformers
 manga-ocr
 pytesseract
+wordfreq
 deep-translator
 translate
+anthropic
 fastapi
 uvicorn[standard]
 python-multipart

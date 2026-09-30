@@ -14,9 +14,12 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from . import mangadex
-from .chapters import build_zip, jobs, zip_name
+from .jobs import build_zip, manager, zip_name
 from .languages import LANGUAGES, check_pair, language_name, source_languages, target_languages
 from .pipeline import translate_image
+
+MAX_UPLOAD_FILES = 500
+UPLOAD_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp", ".bmp"}
 
 FRONTEND_DIR = Path(__file__).resolve().parents[2] / "frontend"
 
@@ -120,7 +123,7 @@ def mangadex_chapters(manga_id: str, lang: str):
     return {"chapters": chapters}
 
 
-# --- Chapter jobs ------------------------------------------------------------------
+# --- Jobs: MangaDex chapters and uploaded batches -----------------------------------
 
 
 class ChapterRequest(BaseModel):
@@ -130,7 +133,7 @@ class ChapterRequest(BaseModel):
 
 
 def _job_or_404(job_id: str):
-    job = jobs.get(job_id)
+    job = manager.get(job_id)
     if job is None:
         raise HTTPException(status_code=404, detail="Unknown job (the server may have restarted)")
     return job
@@ -139,7 +142,31 @@ def _job_or_404(job_id: str):
 @app.post("/api/jobs")
 def start_chapter_job(request: ChapterRequest):
     try:
-        return jobs.submit(request.chapter_id, request.source_lang, request.target_lang).to_dict()
+        return manager.submit(request.chapter_id, request.source_lang, request.target_lang).to_dict()
+    except ValueError as exc:
+        _bad_request(exc)
+
+
+@app.post("/api/uploads")
+def start_upload_job(
+    files: list[UploadFile] = File(...),
+    source_lang: str = Form("ja"),
+    target_lang: str = Form("en"),
+    title: str = Form(""),
+):
+    """Translate uploaded pages as one batch, in the order they were sent."""
+    if len(files) > MAX_UPLOAD_FILES:
+        raise HTTPException(status_code=400, detail=f"Upload at most {MAX_UPLOAD_FILES} pages at a time")
+    pages = []
+    for upload in files:
+        name = upload.filename or "page.png"
+        if Path(name).suffix.lower() not in UPLOAD_EXTENSIONS:
+            continue  # e.g. a thumbs.db or text file that came along with a folder
+        pages.append((name, upload.file.read()))
+    if not pages:
+        raise HTTPException(status_code=400, detail="None of the files are images (PNG, JPG, WEBP or BMP)")
+    try:
+        return manager.submit_upload(pages, source_lang, target_lang, title.strip()).to_dict()
     except ValueError as exc:
         _bad_request(exc)
 
@@ -152,7 +179,7 @@ def chapter_job_status(job_id: str):
 @app.delete("/api/jobs/{job_id}")
 def cancel_chapter_job(job_id: str):
     _job_or_404(job_id)
-    return jobs.cancel(job_id).to_dict()
+    return manager.cancel(job_id).to_dict()
 
 
 @app.get("/api/jobs/{job_id}/pages/{index}")
@@ -167,7 +194,7 @@ def chapter_job_page(job_id: str, index: int):
 def chapter_job_download(job_id: str):
     job = _job_or_404(job_id)
     if job.status != "done" or not job.pages:
-        raise HTTPException(status_code=409, detail="The chapter is still being translated")
+        raise HTTPException(status_code=409, detail="The pages are still being translated")
     return FileResponse(build_zip(job), media_type="application/zip", filename=zip_name(job))
 
 
